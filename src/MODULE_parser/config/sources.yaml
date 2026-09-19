@@ -1,0 +1,108 @@
+# Настройки источников данных. Коммитится — ключей здесь нет, они в .env.
+#
+# trust: уровень доверенности источника. Требование ТЗ — показывать его
+# рядом с каждой ссылкой в интерфейсе.
+#   high   — официальные сайты госорганов, регуляторов, университетов,
+#            научных центров, патентные базы, рецензируемые публикации
+#   medium — профессиональные отраслевые медиа, репозитории кода
+#   low    — соцсети, агрегаторы, блоги, пресс-релизы
+# По ТЗ источник с trust: low не может быть единственным основанием для
+# включения технологии в выдачу — нужно подтверждение источником выше
+# либо пометка о пониженной доверенности.
+#
+# languages: на каком языке подавать поисковые фразы этому источнику.
+# Планировщик отдаёт terms_ru и terms_en, коллектор раскладывает их отсюда.
+#
+# enabled: false — источник не опрашивается. Удобно на отладке и когда
+# источник временно отвалился.
+
+defaults:
+  limit: 200            # документов на источник за один прогон
+  timeout_s: 20         # после этого источник пропускается
+  max_concurrent: 5     # одновременных запросов к одному источнику
+  retries: 3
+
+sources:
+
+  arxiv:
+    enabled: true
+    trust: high
+    source_type: science
+    languages: [en]
+    limit: 300
+    delay_s: 3.0          # требование arXiv: не чаще раза в 3 секунды
+    params:
+      # categories приходят от планировщика (arxiv_categories)
+
+  openalex:
+    enabled: true
+    trust: high
+    source_type: science
+    languages: [en, ru]
+    limit: 300
+    params:
+      languages: [en, ru]   # фильтр выдачи по языку публикации
+
+  crossref:
+    enabled: true
+    trust: high
+    source_type: science
+    languages: [en, ru]
+    limit: 200
+    params:
+      types: [journal-article, proceedings-article, posted-content]
+      require_abstract: false
+
+  google_patents:
+    enabled: true
+    trust: high
+    source_type: patent
+    languages: [en]
+    limit: 200
+    delay_s: 2.0
+    params:
+      date_field: priority   # дата приоритета, а не публикации
+      countries: []          # пусто — все страны
+    note: "недокументированный эндпоинт, может отдавать 503 — не единственный патентный источник"
+
+  imoscow_patents:
+    enabled: false
+    trust: high
+    source_type: patent
+    languages: [ru]
+    limit: 200
+    note: "провайдер ещё не написан"
+
+  github:
+    enabled: true
+    trust: medium
+    source_type: code
+    languages: [en]
+    limit: 150
+    delay_s: 2.0
+    params:
+      min_stars: 3          # отсекает однодневки, но не убивает ранние проекты
+      include_forks: false
+
+  habr:
+    enabled: true
+    trust: medium
+    source_type: media
+    languages: [ru]
+    limit: 150
+    delay_s: 1.5
+    params:
+      target_type: posts
+      order: date           # свежие сначала, нужно для отсечки по дате
+    note: "скрейпинг HTML, вёрстка может измениться"
+
+  hackernews:
+    enabled: true
+    trust: low
+    source_type: social
+    languages: [en]
+    limit: 200
+    delay_s: 0.2
+    params:
+      tags: [story]
+      min_points: 0         # ранний сигнал часто набирает мало баллов

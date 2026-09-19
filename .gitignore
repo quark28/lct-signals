@@ -10,3 +10,8 @@ data/
 .idea/
 .vscode/
 node_modules/
+logs/
+.cache/
+
+#my extension
+.cpg/

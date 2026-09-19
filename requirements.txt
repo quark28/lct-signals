@@ -1,0 +1,14 @@
+httpx
+asyncpg
+pydantic
+sentence-transformers
+scikit-learn
+numpy
+pandas
+python-dotenv
+tenacity
+openai
+openpyxl
+gigachat
+py3langid
+pyyaml

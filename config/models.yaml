@@ -1,0 +1,119 @@
+# Реестр моделей. Коммитится в репозиторий — ключей здесь нет,
+# они берутся из .env.
+#
+# allowed_on_lct: разрешена ли модель правилами хакатона. Использование
+# неразрешённых допускается только после согласования с экспертами
+# Газпромбанк.Тех, поэтому по умолчанию они не подставляются в roles.
+#
+# ВНИМАНИЕ по verify_ssl_certs: false у моделей GigaChat.
+# Серверы Сбера подписаны корневым сертификатом НУЦ Минцифры, которого нет
+# в хранилище Python. Это временное решение на время разработки.
+# ДО СДАЧИ: установить сертификаты НУЦ Минцифры в доверенные корневые центры
+# сертификации и вернуть verify_ssl_certs: true — отключённая проверка
+# сертификатов в решении для банка ловится при ревью кода.
+
+roles:
+  # Извлечение полей из документа: сотни вызовов, нужна дешёвая модель.
+  extract: gigachat-lite
+  # Каноническое название кластера: один вызов на кластер.
+  name_cluster: gigachat-lite
+  # Финальная карточка слабого сигнала: пятнадцать вызовов, нужно качество.
+  write_card: gigachat-max
+
+models:
+
+  # --- GigaChat (Сбер) -------------------------------------------------
+
+  gigachat-lite:
+    provider: gigachat
+    model: GigaChat-2
+    temperature: 0.0
+    max_tokens: 1500
+    verify_ssl_certs: false
+    allowed_on_lct: true
+
+  gigachat-pro:
+    provider: gigachat
+    model: GigaChat-2-Pro
+    temperature: 0.0
+    max_tokens: 2000
+    verify_ssl_certs: false
+    allowed_on_lct: true
+
+  gigachat-max:
+    provider: gigachat
+    model: GigaChat-2-Max
+    temperature: 0.2
+    max_tokens: 3000
+    verify_ssl_certs: false
+    allowed_on_lct: true
+
+  # --- Yandex AI Studio ------------------------------------------------
+  # Имена сверены с client.models.list() на нашем каталоге.
+
+  yandexgpt-lite:
+    provider: yandex
+    model: yandexgpt-5-lite
+    temperature: 0.0
+    max_tokens: 1500
+    allowed_on_lct: true
+
+  yandexgpt-pro:
+    provider: yandex
+    model: yandexgpt-5-pro
+    temperature: 0.0
+    max_tokens: 2000
+    allowed_on_lct: true
+
+  yandexgpt-pro-51:
+    provider: yandex
+    model: yandexgpt-5.1
+    temperature: 0.0
+    max_tokens: 2000
+    allowed_on_lct: true
+
+  qwen3-235b:
+    provider: yandex
+    model: qwen3-235b-a22b-fp8
+    temperature: 0.0
+    max_tokens: 2000
+    allowed_on_lct: true
+
+  qwen36-35b:
+    provider: yandex
+    model: qwen3.6-35b-a3b
+    temperature: 0.0
+    max_tokens: 2000
+    allowed_on_lct: true
+
+  # --- Есть в каталоге, но ВНЕ разрешённого списка ЛЦТ -----------------
+  # Оставлены для полноты картины. В roles не подставлять.
+
+  alice-llm:
+    provider: yandex
+    model: aliceai-llm
+    temperature: 0.0
+    max_tokens: 2000
+    allowed_on_lct: false
+    note: "нет в списке ТЗ, только после согласования с экспертами"
+
+  deepseek-v4-flash:
+    provider: yandex
+    model: deepseek-v4-flash
+    temperature: 0.0
+    max_tokens: 2000
+    allowed_on_lct: false
+    note: "нет в списке ТЗ, только после согласования с экспертами"
+
+  gpt-oss-120b:
+    provider: yandex
+    model: gpt-oss-120b
+    temperature: 0.0
+    max_tokens: 2000
+    allowed_on_lct: false
+    note: "нет в списке ТЗ, только после согласования с экспертами"
+
+  # --- Разрешены ТЗ, но не подключены ----------------------------------
+  # gpt-4.1 и gpt-5.6-luna требуют доступа к platform.openai.com.
+  # Заказчик рекомендовал модели, доступные из РФ без VPN, поэтому
+  # отдельный провайдер под них не реализован.
