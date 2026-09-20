@@ -84,15 +84,10 @@ class CrossrefProvider(BaseProvider):
 
     def _fetch_page(self, query: CrossrefQuery, cursor: str, rows: int) -> dict[str, Any]:
         params = {
-            # query.bibliographic ищет по заголовку, авторам и изданию.
-            "query.bibliographic": " ".join(query.terms),
+            # Crossref давится длинными запросами: берём первые 8 фраз.
+            "query.bibliographic": " ".join(query.terms[:8]),
             "rows": rows,
             "cursor": cursor,
-            "select": ",".join([
-                "DOI", "title", "abstract", "author", "issued", "created",
-                "type", "container-title", "URL", "subject", "language",
-                "is-referenced-by-count", "publisher",
-            ]),
         }
 
         filters = self._build_filters(query)

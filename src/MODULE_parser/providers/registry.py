@@ -12,6 +12,7 @@ from src.MODULE_parser.providers.hackernews import HackerNewsProvider
 from src.MODULE_parser.providers.github import GitHubProvider
 from src.MODULE_parser.providers.crossref import CrossrefProvider
 from src.MODULE_parser.providers.google_patents import GooglePatentsProvider
+from src.MODULE_parser.providers.habr import HabrProvider
 
 _PROVIDER_CLASSES: list[type[BaseProvider]] = [
     ArxivProvider,
@@ -20,6 +21,7 @@ _PROVIDER_CLASSES: list[type[BaseProvider]] = [
     GitHubProvider,
     CrossrefProvider,
     GooglePatentsProvider,
+    HabrProvider
 ]
 
 _REGISTRY: dict[str, type[BaseProvider]] = {cls.name: cls for cls in _PROVIDER_CLASSES}

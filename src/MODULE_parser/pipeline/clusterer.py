@@ -26,7 +26,7 @@ from src.models import Document
 # Порог косинусного расстояния (1 - косинусная близость), ниже которого
 # названия считаются одной технологией. Подбирается эмпирически на
 # известных сигналах из датасета заказчика.
-DISTANCE_THRESHOLD = 0.25
+DISTANCE_THRESHOLD = 0.15
 
 
 class Cluster(BaseModel):
@@ -47,6 +47,20 @@ class Cluster(BaseModel):
             return ""
         return Counter(self.name_variants).most_common(1)[0][0]
 
+GENERIC_NAMES = {
+    "искусственный интеллект", "машинное обучение", "глубокое обучение",
+    "нейронные сети", "большие данные", "блокчейн", "криптовалюты",
+    "облачные вычисления", "интернет вещей", "кибербезопасность",
+    "финтех", "цифровизация", "автоматизация", "аналитика данных",
+    "artificial intelligence", "machine learning", "deep learning",
+    "blockchain", "big data", "cloud computing", "cybersecurity",
+    "цифровые технологии", "финансовые технологии", "информационные технологии",
+    "программное обеспечение", "мобильные приложения", "веб-технологии",
+}
+
+
+def is_generic(name: str) -> bool:
+    return name.strip().lower() in GENERIC_NAMES
 
 def cluster_documents(
     document_keys: list[str],
@@ -75,7 +89,10 @@ def cluster_documents(
         n_clusters=None,
         distance_threshold=distance_threshold,
         metric="cosine",
-        linkage="average",
+        # complete: расстояние между кластерами = расстояние между самыми
+        # далёкими точками. Не даёт цепочкам слипаться в один ком,
+        # как average.
+        linkage="complete",
     )
     labels = model.fit_predict(embeddings)
 
@@ -112,8 +129,11 @@ def flatten_technologies(
         if not getattr(fields, "is_technology", False):
             continue
         for technology in getattr(fields, "technologies", []):
+            name = technology.name_ru or technology.name_original
+            if is_generic(name):
+                continue
             keys.append(document_key)
-            names.append(technology.name_ru or technology.name_original)
+            names.append(name)
             contexts.append(getattr(fields, "summary_ru", ""))
 
     return keys, names, contexts

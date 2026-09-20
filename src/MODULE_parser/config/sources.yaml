@@ -85,16 +85,8 @@ sources:
       include_forks: false
 
   habr:
-    enabled: true
-    trust: medium
-    source_type: media
-    languages: [ru]
-    limit: 150
-    delay_s: 1.5
-    params:
-      target_type: posts
-      order: date           # свежие сначала, нужно для отсечки по дате
-    note: "скрейпинг HTML, вёрстка может измениться"
+    enabled: false
+    note: "robots.txt запрещает автоматический доступ к /search/ — источник отключён"
 
   hackernews:
     enabled: true

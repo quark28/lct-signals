@@ -12,3 +12,7 @@ openpyxl
 gigachat
 py3langid
 pyyaml
+beautifulsoup4
+lxml
+psycopg[binary]
+psycopg-pool

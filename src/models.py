@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Any, Literal, Optional
+import hashlib
 
 from pydantic import BaseModel, Field
 
@@ -37,5 +38,10 @@ class Document(BaseModel):
 
     @property
     def key(self) -> str:
-        """Глобально уникальный ключ документа. Он же ключ кеша извлечения."""
-        return f"{self.provider}:{self.doc_id}"
+        """Устойчивый ключ документа. Если у источника нет своего
+        идентификатора, считаем хеш от ссылки или от заголовка с датой."""
+        if self.doc_id:
+            return f"{self.provider}:{self.doc_id}"
+        seed = self.url or f"{self.title}|{self.published_at}"
+        digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:16]
+        return f"{self.provider}:{digest}"
