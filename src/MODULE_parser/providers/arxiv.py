@@ -26,7 +26,7 @@ NS = {
 
 PAGE_SIZE = 100          # arXiv рекомендует не больше 100 за запрос
 REQUEST_DELAY = 3.0      # секунд между запросами, требование arXiv
-TIMEOUT = 20.0
+TIMEOUT = 60.0
 
 
 class ArxivQuery(SourceQuery):

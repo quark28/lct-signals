@@ -28,19 +28,21 @@ class DatabaseSettings:
 
 @dataclass
 class SourceCredentials:
-    """Ключи источников. Пустое значение допустимо: провайдер либо
-    работает без ключа, либо сам сообщит об ошибке."""
-
     openalex_key: str = ""
     github_token: str = ""
     contact_email: str = ""
+    yandex_api_key: str = ""
+    yandex_folder_id: str = ""
 
     def as_kwargs(self) -> dict[str, dict[str, str]]:
-        """В том виде, в каком их ждёт коллектор."""
         return {
             "openalex": {"api_key": self.openalex_key},
             "github": {"token": self.github_token},
             "crossref": {"mailto": self.contact_email},
+            "yandex_search": {
+                "api_key": self.yandex_api_key,
+                "folder_id": self.yandex_folder_id,
+            },
         }
 
 
@@ -116,10 +118,12 @@ def get_settings(reload: bool = False) -> Settings:
             openalex_key=os.getenv("OPENALEX_KEY", ""),
             github_token=os.getenv("GITHUB_TOKEN", ""),
             contact_email=os.getenv("CONTACT_EMAIL", ""),
+            yandex_api_key=os.getenv("YANDEX_API_KEY", ""),
+            yandex_folder_id=os.getenv("YANDEX_FOLDER_ID", ""),
         ),
         pipeline=PipelineSettings(
             duplicate_threshold=float(os.getenv("DUPLICATE_THRESHOLD", "0.93")),
-            cluster_distance=float(os.getenv("CLUSTER_DISTANCE", "0.20")),
+            cluster_distance=float(os.getenv("CLUSTER_DISTANCE", "0.15")),
             llm_parallel=int(os.getenv("LLM_PARALLEL", "5")),
             top_n=int(os.getenv("TOP_N", "15")),
         ),

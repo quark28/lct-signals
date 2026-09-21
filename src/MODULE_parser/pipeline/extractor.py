@@ -14,6 +14,7 @@
 
 import concurrent.futures
 import threading
+import hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -38,7 +39,7 @@ class Funding(BaseModel):
     company: Optional[str] = None
     round_stage: Optional[str] = None
     amount_usd: Optional[float] = None
-    currency: str = "USD"
+    currency: Optional[str] = "USD"
 
 
 class ExtractedFields(BaseModel):
@@ -52,6 +53,7 @@ class ExtractedFields(BaseModel):
     funding: list[Funding] = Field(default_factory=list)
     deployment_markers: list[str] = Field(default_factory=list)
     summary_ru: str = ""
+    source_key: Optional[str] = None
 
 
 class ExtractionStats(BaseModel):
@@ -77,8 +79,14 @@ class ExtractionCache:
         self.directory.mkdir(parents=True, exist_ok=True)
 
     def _path(self, document_key: str) -> Path:
-        safe = document_key.replace(":", "__").replace("/", "_")
-        return self.directory / f"{safe}.json"
+        """Имя файла — хеш от ключа.
+
+        У веб-поиска идентификатор документа это URL целиком, и с
+        процентным кодированием кириллицы он легко превышает лимит
+        длины пути в Windows. Хеш даёт фиксированные 16 символов.
+        """
+        digest = hashlib.sha1(document_key.encode("utf-8")).hexdigest()[:16]
+        return self.directory / f"{digest}.json"
 
     def get(self, document_key: str) -> Optional[ExtractedFields]:
         path = self._path(document_key)
@@ -165,7 +173,7 @@ def extract_many(
                 f"РАЗБОР [{document.key}]: {exc} | ответ: {response.text[:200]!r}",
             )
             return
-
+        fields.source_key = document.key
         cache.put(document.key, fields)
         with lock:
             results[document.key] = fields

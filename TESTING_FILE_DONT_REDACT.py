@@ -1,28 +1,26 @@
 from dotenv import load_dotenv
-from src.db import pool, repo
-from src.models import Document
+from src.MODULE_parser.providers.yandex_search import YandexSearchProvider
+import os
+
 load_dotenv()
-
-qid = repo.create_query("проверка", {"terms_ru": ["тест"]})
-
-doc = Document(
-    provider="arxiv", doc_id="test123",
-    url="https://arxiv.org/abs/test123",
-    title="Тестовый документ", abstract="Текст",
-    source_type="science", language="ru",
+p = YandexSearchProvider(
+    api_key=os.environ["YANDEX_API_KEY"],
+    folder_id=os.environ["YANDEX_FOLDER_ID"],
 )
-repo.save_documents([doc], {"arxiv": "high"})
+docs = p.parse_source(p.build_query({
+    "terms": ["neuromorphic computing funding"],
+    "limit": 10,
+    "deferred": False,  # sync-режим для быстрой проверки
+}))
+for d in docs:
+    print(f"{d.raw.get('domain', ''):30} | {d.title[:60]}")
 
-ids = repo.save_clusters(qid, [{
-    "name_ru": "тестовая технология",
-    "document_keys": [doc.key],
-    "name_variants": ["тестовая технология"],
-    "doc_count": 1,
-    "provider_counts": {"arxiv": 1},
-    "type_counts": {"science": 1},
-    "timeline": {"all": {"2026Q3": 1}},
-}])
-
-print("кластер:", repo.get_clusters(qid)[0]["name_ru"])
-print("документы:", repo.get_cluster_documents(ids[0]))
-pool.close_pool()
+import time
+start = time.monotonic()
+docs = p.parse_source(p.build_query({
+    "terms": ["neuromorphic computing funding"],
+    "limit": 10,
+    "deferred": True,
+}))
+print(f"{len(docs)} документов за {time.monotonic() - start:.0f} с")
+p.close()

@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from src.models import Document
 from src.MODULE_parser.providers import registry
 from src.MODULE_parser.pipeline.planner import QueryPlan
+from src.MODULE_parser.utils.limits import retry
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "sources.yaml"
 
@@ -116,6 +117,11 @@ def collect(
 
     return CollectResult(documents=documents, per_source=per_source)
 
+@retry(attempts=2, backoff=3.0)
+def _call_provider(provider, query):
+    """Один повтор при сбое сети. Больше не надо: на демо лучше
+    потерять источник, чем заставить жюри ждать."""
+    return provider.parse_source(query)
 
 def _fetch_one(
     name: str,
@@ -127,11 +133,11 @@ def _fetch_one(
     credentials: dict[str, Any],
 ) -> list[Document]:
     """Сходить в один источник. Исключения наружу — их ловит collect."""
-    provider = registry.get(name, **credentials)
+    provider = registry.get(name, **credentials) if credentials else registry.get(name)
     try:
         raw_query = _build_raw_query(spec, defaults, plan, date_from, date_to)
         query = provider.build_query(raw_query)
-        return provider.parse_source(query)
+        return _call_provider(provider, query)
     finally:
         close = getattr(provider, "close", None)
         if close:

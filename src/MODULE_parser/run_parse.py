@@ -26,6 +26,7 @@ from src.models import Document
 from src.settings import get_settings
 from src.MODULE_parser.pipeline import clusterer, collector, dedup, extractor, planner
 from src.MODULE_parser.pipeline.embedder import Embedder
+import numpy as np
 
 
 def parse_args() -> argparse.Namespace:
@@ -324,6 +325,19 @@ def main() -> None:
     clusters = clusterer.cluster_documents(
         keys, names, name_vectors, distance_threshold=settings.pipeline.cluster_distance
     )
+     # Отбросить кластеры, совпадающие с самим направлением запроса.
+    # Вектор запроса — среднее от исходной фразы и первых фраз плана:
+    # одно слово «Edge» слишком коротко для надёжного эмбеддинга.
+    anchor_texts = [args.query] + plan.terms_ru[:2] + plan.terms_en[:2]
+    query_vector = embedder.encode(anchor_texts).mean(axis=0)
+    query_vector /= np.linalg.norm(query_vector)
+
+    cluster_name_vectors = embedder.encode([c.most_common_name() for c in clusters])
+    clusters, umbrella = clusterer.drop_umbrella(clusters, cluster_name_vectors, query_vector)
+
+    print(f"Отброшено как само направление запроса: {len(umbrella)}")
+    for cluster, similarity in sorted(umbrella, key=lambda x: -x[1])[:10]:
+        print(f"    {similarity:.2f}  {cluster.most_common_name()} [{cluster.size}]")
     print(f"Кластеров: {len(clusters)}\n")
 
     # 8. Агрегаты и сохранение кластеров

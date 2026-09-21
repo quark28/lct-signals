@@ -29,7 +29,7 @@ sources:
     trust: high
     source_type: science
     languages: [en]
-    limit: 300
+    limit: 80
     delay_s: 3.0          # требование arXiv: не чаще раза в 3 секунды
     params:
       # categories приходят от планировщика (arxiv_categories)
@@ -39,7 +39,7 @@ sources:
     trust: high
     source_type: science
     languages: [en, ru]
-    limit: 300
+    limit: 120
     params:
       languages: [en, ru]   # фильтр выдачи по языку публикации
 
@@ -48,7 +48,7 @@ sources:
     trust: high
     source_type: science
     languages: [en, ru]
-    limit: 200
+    limit: 80
     params:
       types: [journal-article, proceedings-article, posted-content]
       require_abstract: false
@@ -98,3 +98,21 @@ sources:
     params:
       tags: [story]
       min_points: 0         # ранний сигнал часто набирает мало баллов
+  tech_media:
+    enabled: true
+    trust: medium
+    source_type: media
+    languages: [en, ru]
+    limit: 200
+    params:
+      filter_by_terms: true
+  yandex_search:
+    enabled: true
+    trust: medium
+    source_type: media
+    languages: [en, ru]
+    limit: 400
+    params:
+      deferred: true
+      search_type: SEARCH_TYPE_COM
+      docs_per_query: 40
