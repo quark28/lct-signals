@@ -17,3 +17,4 @@ lxml
 psycopg[binary]
 psycopg-pool
 feedparser
+truststore

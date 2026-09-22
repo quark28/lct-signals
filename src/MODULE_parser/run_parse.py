@@ -15,7 +15,7 @@
 
 import argparse
 from collections import Counter, defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 import yaml
@@ -58,6 +58,33 @@ def trust_map() -> dict[str, str]:
         name: spec.get("trust", "medium")
         for name, spec in config.get("sources", {}).items()
     }
+
+
+# Даты вне этого окна — мусор источников (crossref/openalex отдают 0001-01-01, 1900 и т.п.).
+# Они ломали среднюю дату (на Windows fromtimestamp не принимает даты до 1970)
+# и портили первую дату кластера и поквартальный ряд.
+MIN_VALID_YEAR = 1990
+
+
+def clean_date(moment: Optional[datetime]) -> Optional[datetime]:
+    """Привести к UTC и отбросить невозможные даты. None — если дата непригодна."""
+    if moment is None:
+        return None
+    if moment.tzinfo is None:  # смесь дат с зоной и без ломает вычитание
+        moment = moment.replace(tzinfo=timezone.utc)
+    if moment.year < MIN_VALID_YEAR:
+        return None
+    if moment > datetime.now(timezone.utc) + timedelta(days=366):
+        return None
+    return moment
+
+
+def mean_date(dates: list[datetime]) -> Optional[datetime]:
+    """Средняя дата без timestamp(): работает на любой ОС и с любыми датами."""
+    if not dates:
+        return None
+    base = dates[0]
+    return base + sum((d - base for d in dates), timedelta()) / len(dates)
 
 
 def quarter(moment: datetime) -> str:
@@ -120,9 +147,10 @@ def build_cluster_rows(
                 if host:
                     domains.add(host)
 
-            if document.published_at:
-                dates.append(document.published_at)
-                label = quarter(document.published_at)
+            published = clean_date(document.published_at)
+            if published:
+                dates.append(published)
+                label = quarter(published)
                 timeline["all"][label] += 1
                 timeline[document.source_type][label] += 1
 
@@ -190,12 +218,7 @@ def build_cluster_rows(
 
             "first_published_at": min(dates) if dates else None,
             "last_published_at": max(dates) if dates else None,
-            "mean_published_at": (
-                datetime.fromtimestamp(
-                    sum(d.timestamp() for d in dates) / len(dates), tz=dates[0].tzinfo
-                )
-                if dates else None
-            ),
+            "mean_published_at": mean_date(dates),
             "timeline": {k: dict(v) for k, v in timeline.items()},
 
             "patent_count": patent_count,
@@ -223,7 +246,7 @@ def build_cluster_rows(
     return rows
 
 
-def main() -> None:
+def run() -> None:
     settings = get_settings()
 
     problems = settings.validate()
@@ -243,6 +266,9 @@ def main() -> None:
     print(f"Запрос: {args.query}")
     plan = planner.build_plan(llm_registry.for_role("plan"), args.query)
     print(f"  фраз ru/en: {len(plan.terms_ru)}/{len(plan.terms_en)}")
+    print(f"  направление: {', '.join(plan.core_terms)}")
+    for subtopic in plan.subtopics:
+        print(f"  подтехнология: {subtopic.name_en} / {subtopic.name_ru}")
     for area in plan.adjacent_areas:
         print(f"  смежная область: {area.area} — {area.why}")
 
@@ -328,7 +354,10 @@ def main() -> None:
      # Отбросить кластеры, совпадающие с самим направлением запроса.
     # Вектор запроса — среднее от исходной фразы и первых фраз плана:
     # одно слово «Edge» слишком коротко для надёжного эмбеддинга.
-    anchor_texts = [args.query] + plan.terms_ru[:2] + plan.terms_en[:2]
+    # Только запрос и синонимы самого направления. НЕ фразы поиска: после перехода
+    # на подтехнологии они описывают как раз искомые сигналы, и якорь из них
+    # выбрасывал нужные кластеры как «зонтичные» (прогон 22.09: 85 отброшено, 10 осталось).
+    anchor_texts = [args.query] + plan.core_terms[:4]
     query_vector = embedder.encode(anchor_texts).mean(axis=0)
     query_vector /= np.linalg.norm(query_vector)
 
@@ -364,8 +393,20 @@ def main() -> None:
 
     for row in rows[:20]:
         print(f"  [{row['doc_count']:3}] {row['name_ru']}")
+    if len(rows) > 20:
+        print(f"  … и ещё {len(rows) - 20}; все: python -m scripts.dump_clusters")
 
-    pool.close_pool()
+
+def main() -> None:
+    # finally: пул соединений закрывается и при ошибке, и при раннем return,
+    # иначе висят потоки psycopg_pool («couldn't stop thread»).
+    try:
+        run()
+    finally:
+        try:
+            pool.close_pool()
+        except Exception:  # noqa: BLE001 — пул мог и не открыться
+            pass
 
 
 if __name__ == "__main__":

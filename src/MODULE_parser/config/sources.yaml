@@ -74,7 +74,7 @@ sources:
     note: "провайдер ещё не написан"
 
   github:
-    enabled: true
+    enabled: false
     trust: medium
     source_type: code
     languages: [en]
@@ -89,7 +89,7 @@ sources:
     note: "robots.txt запрещает автоматический доступ к /search/ — источник отключён"
 
   hackernews:
-    enabled: true
+    enabled: false
     trust: low
     source_type: social
     languages: [en]

@@ -1,199 +1,203 @@
-"""Провайдер технологических медиа через RSS. Ключи не нужны.
+"""tech_media: поиск по архивам отраслевых СМИ через WordPress REST API.
 
-ЗАЧЕМ. Разбор датасета заказчика показал: 285 ссылок, 206 уникальных
-доменов, и повторяется меньше двадцати. Методологи искали по вебу, а не
-по списку сайтов. Полностью это воспроизводит только поисковый API
-(Yandex Search API), но он платный. RSS — бесплатное приближение,
-покрывающее самые частые домены из датасета: TechCrunch, SiliconANGLE,
-EE Times, DataCenterDynamics, GeekWire, EU-Startups и другие.
+Почему не RSS: лента отдаёт только последние 10–50 записей (окно от часов до недели),
+а эталонные сигналы датируются 2025–2026. WP REST (/wp-json/wp/v2/posts?search=)
+ищет по всему архиву сайта, бесплатно и без ключей.
 
-Именно этих источников не хватало: у них компании, раунды и суммы, то есть
-ровно те признаки, на которых построены обоснования в датасете
-(слово "раунд" встречается там 26 раз, "seed" — 17).
+Проверено 22.09.2026 (scripts/probe_media2.py): работает на techcrunch, siliconangle,
+theaiinsider, pulse2, roboticsandautomationnews. geekwire, eu-startups,
+datacenterdynamics отдают 403 (Cloudflare), pandaily 404, eetimes висит.
 
-ОГРАНИЧЕНИЕ. RSS отдаёт только последние записи ленты, обычно 20–50 штук,
-и не умеет искать по ключевым словам. Поэтому провайдер забирает свежие
-записи всех лент и фильтрует их локально по фразам запроса. Для глубокой
-истории RSS не годится, для текущих сигналов — вполне.
-
-Список лент задаётся параметром feeds: его можно менять, не трогая код.
-Ленты, которые не открылись или изменили формат, пропускаются молча —
-одна мёртвая лента не должна ронять источник целиком.
+Поведение при сбоях:
+- 401/403/404 или не-JSON — сайт выключается до конца прогона, остальные работают;
+- 429 — пауза и один повтор, затем сайт выключается;
+- таймаут/сетевая ошибка — пропускается одна фраза, после 3 подряд сайт выключается;
+- если все сайты упали — исключение (коллектор пометит источник как failed, а не «0 документов»).
 """
+from __future__ import annotations
 
-import concurrent.futures
-from datetime import datetime, timezone
-from typing import Any, ClassVar, Optional
+import html
+import re
+import ssl
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, time as dtime, timezone
+from typing import Optional
 from urllib.parse import urlparse
 
-import feedparser
 import httpx
 from pydantic import Field
 
 from src.models import Document
 from src.MODULE_parser.providers.base import BaseProvider, SourceQuery
-from src.MODULE_parser.utils.lang import detect as detect_language
 
-TIMEOUT = 15.0
-MAX_PARALLEL_FEEDS = 6
+try:  # сертификаты из хранилища ОС: чинит CERTIFICATE_VERIFY_FAILED на Windows
+    import truststore
+    _VERIFY: ssl.SSLContext | bool = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+except ImportError:
+    _VERIFY = True
 
-# Ленты, отобранные по частоте домена в датасете заказчика.
-# Каждую стоит проверить в браузере: сайты меняют адреса лент.
-DEFAULT_FEEDS: list[str] = [
-    # англоязычные технологические медиа и новости о финансировании
-    "https://techcrunch.com/feed/",
-    "https://siliconangle.com/feed/",
-    "https://venturebeat.com/feed/",
-    "https://www.eetimes.com/feed/",
-    "https://www.nextplatform.com/feed/",
-    "https://www.geekwire.com/feed/",
-    "https://www.datacenterdynamics.com/en/rss/",
-    "https://www.eu-startups.com/feed/",
-    "https://www.therobotreport.com/feed/",
-    "https://roboticsandautomationnews.com/feed/",
-    "https://www.securityweek.com/feed/",
-    "https://www.tomshardware.com/feeds/all",
-    # русскоязычные
-    "https://habr.com/ru/rss/articles/?fl=ru",
+DEFAULT_SITES = [
+    "techcrunch.com",
+    "siliconangle.com",
+    "theaiinsider.tech",
+    "pulse2.com",
+    "roboticsandautomationnews.com",
 ]
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+)
+TIMEOUT_S = 30.0
+DELAY_S = 1.0            # пауза между запросами к одному сайту
+RATE_LIMIT_PAUSE_S = 15.0
+MAX_NET_ERRORS = 3
+FATAL_STATUSES = {401, 403, 404, 410}
+
+_TAGS = re.compile(r"<[^>]+>")
+_SPACES = re.compile(r"\s+")
+_WP_TAIL = re.compile(r"(\[\s*(…|&hellip;|\.\.\.)\s*\]|The post .* appeared first on .*)$", re.S)
+
+
+class SiteDisabled(Exception):
+    """Сайт недоступен до конца прогона."""
 
 
 class TechMediaQuery(SourceQuery):
-    """Параметры, специфичные для медиа-провайдера."""
+    sites: list[str] = Field(default_factory=lambda: list(DEFAULT_SITES))
+    per_term: int = Field(default=20, ge=1, le=100)  # лимит WP: per_page ≤ 100
 
-    # Список лент. Пусто — берутся DEFAULT_FEEDS.
-    feeds: list[str] = Field(default_factory=list)
-    # Требовать совпадения хотя бы одной фразы запроса в заголовке
-    # или описании. False — забрать ленты целиком (для пакетного сбора).
-    filter_by_terms: bool = True
+
+def clean_text(value: str) -> str:
+    text = _TAGS.sub(" ", html.unescape(value or ""))  # unescape до чистки: бывает &lt;p&gt;
+    text = _WP_TAIL.sub("", text.strip())
+    return _SPACES.sub(" ", text).strip()
+
+
+def parse_wp_date(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", ""))
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=timezone.utc)  # date_gmt приходит без зоны, но это UTC
 
 
 class TechMediaProvider(BaseProvider):
-    name: ClassVar[str] = "tech_media"
-    source_type: ClassVar[str] = "media"
-    query_model: ClassVar[type[SourceQuery]] = TechMediaQuery
+    name = "tech_media"
+    source_type = "media"
+    query_model = TechMediaQuery
 
-    def __init__(
-        self,
-        feeds: Optional[list[str]] = None,
-        user_agent: str = "Mozilla/5.0 (compatible; lct-signals/0.1)",
-    ):
-        self._feeds = feeds or DEFAULT_FEEDS
-        self._client = httpx.Client(
-            timeout=TIMEOUT,
-            headers={"User-Agent": user_agent},
+    def __init__(self, **_: object) -> None:
+        self.client = httpx.Client(
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            timeout=TIMEOUT_S,
             follow_redirects=True,
+            verify=_VERIFY,
         )
-
-    # --- публичный метод контракта -------------------------------------
-
-    def parse_source(self, query: TechMediaQuery) -> list[Document]:
-        feeds = query.feeds or self._feeds
-        needles = [t.lower() for t in query.terms] if query.filter_by_terms else []
-
-        documents: list[Document] = []
-        seen: set[str] = set()
-
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(MAX_PARALLEL_FEEDS, len(feeds) or 1)
-        ) as pool:
-            futures = {pool.submit(self._fetch_feed, url): url for url in feeds}
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    entries = future.result()
-                except Exception:
-                    continue  # мёртвая лента не роняет источник
-
-                for entry in entries:
-                    document = self._parse_entry(entry, futures[future])
-                    if document is None or document.doc_id in seen:
-                        continue
-                    if not self._matches(document, needles):
-                        continue
-                    if not self._in_period(document, query):
-                        continue
-                    seen.add(document.doc_id)
-                    documents.append(document)
-
-        documents.sort(
-            key=lambda d: (d.published_at is None, d.published_at), reverse=True
-        )
-        return documents[: query.limit]
-
-    # --- внутреннее -----------------------------------------------------
-
-    def _fetch_feed(self, url: str) -> list[Any]:
-        """Скачать и разобрать одну ленту. feedparser сам переваривает
-        RSS и Atom, поэтому формат ленты значения не имеет."""
-        response = self._client.get(url)
-        response.raise_for_status()
-        parsed = feedparser.parse(response.content)
-        return list(parsed.entries)
-
-    def _parse_entry(self, entry: Any, feed_url: str) -> Optional[Document]:
-        link = getattr(entry, "link", "")
-        if not link:
-            return None
-
-        title = self._clean(getattr(entry, "title", ""))
-        summary = self._clean(
-            getattr(entry, "summary", "") or getattr(entry, "description", "")
-        )
-
-        return Document(
-            provider=self.name,
-            # Ссылка как идентификатор: своих id у лент нет.
-            doc_id=link,
-            url=link,
-            title=title,
-            abstract=summary,
-            published_at=self._parse_date(entry),
-            language=detect_language(title, summary),
-            source_type=self.source_type,
-            authors=[getattr(entry, "author", "")] if getattr(entry, "author", "") else [],
-            raw={
-                "feed": feed_url,
-                "feed_domain": urlparse(feed_url).netloc,
-                "tags": [t.get("term") for t in getattr(entry, "tags", []) if t.get("term")],
-            },
-        )
-
-    @staticmethod
-    def _matches(document: Document, needles: list[str]) -> bool:
-        """Фильтр по фразам запроса. RSS не умеет искать, фильтруем сами."""
-        if not needles:
-            return True
-        haystack = f"{document.title} {document.abstract}".lower()
-        return any(needle in haystack for needle in needles)
-
-    @staticmethod
-    def _in_period(document: Document, query: TechMediaQuery) -> bool:
-        if document.published_at is None:
-            return True  # без даты не отбрасываем: дату дополнит извлечение
-        moment = document.published_at.date()
-        if query.date_from and moment < query.date_from:
-            return False
-        if query.date_to and moment > query.date_to:
-            return False
-        return True
-
-    @staticmethod
-    def _clean(text: str) -> str:
-        """Из описаний RSS убираем разметку: ленты часто отдают HTML."""
-        import re
-
-        text = re.sub(r"<[^>]+>", " ", text or "")
-        return " ".join(text.split())
-
-    @staticmethod
-    def _parse_date(entry: Any) -> Optional[datetime]:
-        """feedparser сам разбирает дату в struct_time, независимо
-        от того, в каком формате она была в ленте."""
-        for field in ("published_parsed", "updated_parsed"):
-            parsed = getattr(entry, field, None)
-            if parsed:
-                return datetime(*parsed[:6], tzinfo=timezone.utc)
-        return None
+        self.site_report: dict[str, str] = {}
 
     def close(self) -> None:
-        self._client.close()
+        self.client.close()
+
+    # --- один запрос ---
+    def _search(self, site: str, term: str, query: TechMediaQuery) -> list[dict]:
+        params: dict[str, object] = {
+            "search": term,
+            "orderby": "relevance",  # по умолчанию WP сортирует по дате
+            "per_page": query.per_term,
+            "_fields": "id,date_gmt,link,title,excerpt",
+        }
+        # Даты передаём только если заданы: без --from/--to ищем по всему архиву.
+        if query.date_from:
+            params["after"] = datetime.combine(query.date_from, dtime.min).isoformat()
+        if query.date_to:
+            params["before"] = datetime.combine(query.date_to, dtime.max).isoformat(timespec="seconds")
+
+        url = f"https://{site}/wp-json/wp/v2/posts"
+        for attempt in (1, 2):
+            r = self.client.get(url, params=params)
+            time.sleep(DELAY_S)
+            if r.status_code == 429 and attempt == 1:
+                time.sleep(RATE_LIMIT_PAUSE_S)
+                continue
+            if r.status_code in FATAL_STATUSES or r.status_code == 429:
+                raise SiteDisabled(f"HTTP {r.status_code}")
+            if r.status_code == 400:  # WP отвергает параметр: странная фраза, не повод выключать сайт
+                return []
+            r.raise_for_status()
+            try:
+                data = r.json()
+            except ValueError:
+                raise SiteDisabled("не JSON (заглушка/Cloudflare)")
+            if not isinstance(data, list):
+                raise SiteDisabled(f"неожиданный ответ: {str(data)[:80]}")
+            return data
+        return []
+
+    # --- один сайт, все фразы последовательно ---
+    def _crawl_site(self, site: str, query: TechMediaQuery) -> list[tuple[int, dict]]:
+        found: list[tuple[int, dict]] = []  # (позиция в выдаче, пост)
+        net_errors = total_errors = 0
+        for term in query.terms:
+            try:
+                posts = self._search(site, term, query)
+                net_errors = 0
+            except SiteDisabled as exc:
+                self.site_report[site] = f"выключен: {exc}"
+                return found
+            except httpx.HTTPError as exc:
+                net_errors += 1
+                total_errors += 1
+                if net_errors >= MAX_NET_ERRORS:
+                    self.site_report[site] = f"выключен: {type(exc).__name__} ×{net_errors}"
+                    return found
+                continue
+            for rank, post in enumerate(posts):
+                post["_site"], post["_term"] = site, term
+                found.append((rank, post))
+        self.site_report[site] = f"ok, {len(found)} попаданий, сетевых ошибок {total_errors}"
+        return found
+
+    def _to_document(self, post: dict) -> Optional[Document]:
+        link = post.get("link") or ""
+        if not link:
+            return None
+        site = post["_site"]
+        return Document(
+            provider=self.name,
+            doc_id=f"{site}:{post.get('id', '')}",
+            url=link,
+            title=clean_text((post.get("title") or {}).get("rendered", "")),
+            abstract=clean_text((post.get("excerpt") or {}).get("rendered", "")),
+            published_at=parse_wp_date(post.get("date_gmt", "")),
+            language="en",
+            source_type=self.source_type,
+            raw={"site": site, "term": post["_term"], "domain": urlparse(link).netloc},
+        )
+
+    def parse_source(self, query: SourceQuery) -> list[Document]:
+        if not isinstance(query, TechMediaQuery):
+            query = TechMediaQuery(**query.model_dump())
+        sites = query.sites or DEFAULT_SITES
+        with ThreadPoolExecutor(max_workers=len(sites)) as pool:
+            per_site = list(pool.map(lambda s: self._crawl_site(s, query), sites))
+
+        if all(self.site_report.get(s, "").startswith("выключен") for s in sites):
+            raise RuntimeError(f"tech_media: все сайты недоступны: {self.site_report}")
+
+        # Общий лимит (стоимость LLM-извлечения!) делим честно: сначала первые места
+        # выдачи всех сайтов и фраз, потом вторые и т.д. Дубли по URL отбрасываем.
+        hits = sorted((h for site_hits in per_site for h in site_hits), key=lambda h: h[0])
+        seen: set[str] = set()
+        docs: list[Document] = []
+        for _, post in hits:
+            doc = self._to_document(post)
+            if doc is None or doc.url in seen:
+                continue
+            seen.add(doc.url)
+            docs.append(doc)
+            if len(docs) >= query.limit:
+                break
+        return docs
